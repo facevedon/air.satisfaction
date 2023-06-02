@@ -1,0 +1,471 @@
+---
+title: "Avance 1"
+author: "DC"
+date: "2023-05-27"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Avance 1
+
+## Librerías
+
+```{r message=FALSE}
+library(tidyverse)
+library(caret)
+library(ggplot2)
+library(e1071)
+library(DataExplorer)
+library(MASS)
+library(caTools)
+library(plotly)
+library(PRROC)
+library(pROC)
+library(dplyr)
+library(readr)
+library(rpart.plot)
+library(tree)
+library(class)
+library(rpart)
+library(corrplot)
+library(factoextra)
+library(gridExtra)
+library(cluster)
+```
+
+## EDA Inicial
+
+```{r}
+set.seed(163)
+test <- read.csv("C:/Users/facev/OneDrive/Documentos/Universidad/2023-1/ANALISIS DE NEGOCIOS/TRABAJO FINAL/db_airline/test.csv")
+train <- read.csv("C:/Users/facev/OneDrive/Documentos/Universidad/2023-1/ANALISIS DE NEGOCIOS/TRABAJO FINAL/db_airline/train.csv")
+
+train$satisfaction <- as.factor(train$satisfaction)
+test$satisfaction <- as.factor(test$satisfaction)
+
+plot_intro(train)
+plot_intro(test)
+```
+
+## Eliminar datos faltantes y columnas innecesarias
+
+```{r}
+train<-train[complete.cases(train),]
+test<-test[complete.cases(test),]
+
+train <- train[, !(names(train) %in% c("X", "id"))]
+test <- test[, !(names(test) %in% c("X", "id"))]
+
+```
+
+## Conversión a binarias (1,0) en df train
+
+```{r}
+
+#Convertir la variable "Gender" a binaria
+train$Gender <- ifelse(train$Gender == "Female", 1, 0)
+train$Gender <- as.integer(train$Gender)
+
+#Convertir la variable "Customer.Type" a binaria
+train$Customer.Type <- ifelse(train$Customer.Type == "Loyal Customer", 1, 0)
+train$Customer.Type <- as.integer(train$Customer.Type)
+
+#Convertir la variable "Type.of.Travel" a binaria
+train$Type.of.Travel <- ifelse(train$Type.of.Travel == "Business travel", 1, 0)
+train$Type.of.Travel <- as.integer(train$Type.of.Travel)
+
+# Convertir la variable "Class" a binaria
+train$Class <- ifelse(train$Class == "Eco", 1, 0)
+train$Class <- as.integer(train$Class)
+
+#Convertir la variable "satisfaction" a binaria
+train$satisfaction <- ifelse(train$satisfaction == "satisfied", 1, 0)
+train$satisfaction <- as.integer(train$satisfaction)
+
+```
+
+## Conversión a binarias (1,0) en df test
+
+```{r}
+
+#Convertir la variable "Gender" a binaria
+test$Gender <- ifelse(test$Gender == "Female", 1, 0)
+test$Gender <- as.integer(test$Gender)
+
+#Convertir la variable "Customer.Type" a binaria
+test$Customer.Type <- ifelse(test$Customer.Type == "Loyal Customer", 1, 0)
+test$Customer.Type <- as.integer(test$Customer.Type)
+
+#Convertir la variable "Type.of.Travel" a binaria
+test$Type.of.Travel <- ifelse(test$Type.of.Travel == "Business travel", 1, 0)
+test$Type.of.Travel <- as.integer(test$Type.of.Travel)
+
+# Convertir la variable "Class" a binaria
+test$Class <- ifelse(test$Class == "Eco", 1, 0)
+test$Class <- as.integer(test$Class)
+
+#Convertir la variable "satisfaction" a binaria
+test$satisfaction <- ifelse(test$satisfaction == "satisfied", 1, 0)
+test$satisfaction <- as.integer(test$satisfaction)
+```
+
+## Regresión logística
+
+```{r}
+glm.fit <- glm(satisfaction ~ . , data = train, family="binomial")
+summary(glm.fit)
+
+glm.probs <- predict(glm.fit, test, type="response")
+hist(glm.probs)
+
+#Umbral óptimo
+
+roc_obj <- roc(test$satisfaction,glm.probs)
+plot(roc_obj)
+auc(roc_obj)
+coords(roc_obj, "best", "threshold")
+
+#Matriz de Confusión
+
+glm_pred = rep(0, length(glm.probs))
+glm_pred[glm.probs > 0.5119872] = 1
+confusionMatrix(table(test$satisfaction, glm_pred, dnn = c("Clase real", "Clase predicha")), positive = "1")
+
+#Gráfico PR
+
+grafico_pr<-pr.curve(scores.class0 = 1 - glm.probs,
+scores.class1 = glm.probs,curve = TRUE)
+plot(grafico_pr)
+```
+
+## Residuos del modelo RL
+
+```{r}
+# Residuos del modelo 
+residuals <- residuals(glm.fit)  
+# Gráfico de residuos estandarizados 
+plot(glm.fit, which = 1)  
+# Gráfico de desviación std de los residuos 
+plot(glm.fit, which = 3)  
+# Histograma de los residuos 
+hist(residuals, main = "Histograma de residuos")  
+# Gráfico de dispersión de los residuos vs. ajustes 
+plot(fitted(glm.fit), residuals, main = "Residuos vs. Ajustes",      xlab = "Ajustes", ylab = "Residuos")  
+# Gráfico de residuos vs. variables independientes 
+plot(glm.fit, which = 2) 
+```
+
+## LDA
+
+```{r}
+lda.fit <- lda(satisfaction ~., data=train)
+summary(lda.fit)
+
+lda_pred <- predict(lda.fit,test)
+lda_probs <- predict(lda.fit, test, type = "posterior")$posterior[, "1"]
+
+#Matriz de Confusión
+
+confusionMatrix(table(lda_pred$class,test$satisfaction))
+
+#Curva ROC
+
+roc_obj <- roc(test$satisfaction, lda_probs)
+plot(roc_obj, main = "Curva ROC - Modelo LDA")
+auc_roc <- auc(roc_obj)
+legend("bottomright", paste("AUC =", round(auc_roc, 3)), cex = 0.8)
+
+# Curva PR
+pr_obj <- pr.curve(scores.class0 = lda_probs, weights.class0 = test$satisfaction, curve = TRUE)
+plot(pr_obj, main = "Curva PR - Modelo LDA")
+
+```
+
+## QDA
+
+```{r}
+qda.fit <- qda(satisfaction ~ ., data = train)
+summary(qda.fit)
+
+qda_pred <- predict(qda.fit, test)
+
+# Matriz de Confusión
+confusionMatrix(table(qda_pred$class, test$satisfaction))
+
+# Curva ROC
+qda_probs <- predict(qda.fit, test, type = "posterior")$posterior[, "1"]
+roc_obj <- roc(test$satisfaction, qda_probs)
+plot(roc_obj, main = "Curva ROC - Modelo QDA")
+auc_roc <- auc(roc_obj)
+legend("bottomright", paste("AUC =", round(auc_roc, 3)), cex = 0.8)
+
+# Curva PR
+pr_obj <- pr.curve(scores.class0 = qda_probs, weights.class0 = test$satisfaction, curve = TRUE)
+plot(pr_obj, main = "Curva PR - Modelo QDA")
+
+```
+
+## KNN
+
+```{r}
+n <- 10000
+t_svm<-sample(1:nrow(train),size=n,replace=FALSE)
+train_knn0 <-train[t_svm, ]
+```
+
+```{r}
+train_knn = train_knn0 %>% dplyr::select(-c(satisfaction))
+test_knn = test %>% dplyr::select(-c(satisfaction))
+
+#Buscar qué K entrega la mejor precisión del modelo
+
+overall.accuracy = c()
+for (i in 1:15){
+  knn.pred=knn(train_knn,test_knn,train_knn0$satisfaction,k=i)
+  values = confusionMatrix(table(knn.pred,test$satisfaction))
+  overall = values$overall
+  overall.accuracy = append(overall.accuracy , overall["Accuracy"])
+}
+
+acc = data.frame(k=1:15, accuracy = overall.accuracy)
+
+
+# Con 11 vecinos más cercanos se obtiene la mejor precisión 
+
+ggplot(acc) + aes(x = k, y = accuracy) +geom_line(size = 0.5, colour = "#112446") +  theme_minimal() + geom_vline(xintercept = 11, color = "red")
+
+# Predicciones en el conjunto de testeo
+knn_fit <- knn(train = train_knn, test = test_knn, cl = train_knn0$satisfaction, k = 11, prob = TRUE)
+knn_probs <- attr(knn_fit, "prob")
+
+#Curva ROC
+
+roc_obj <- roc(test$satisfaction, knn_probs)
+plot(roc_obj, main = "Curva ROC - Modelo KNN")
+auc_roc <- auc(roc_obj)
+legend("bottomright", paste("AUC =", round(auc_roc, 3)), cex = 0.8)
+
+#Matriz de confusión
+
+confusionMatrix(table(knn_fit, test$satisfaction))
+```
+
+## Árbol de decisión
+
+```{r}
+#Dataframes del modelo
+
+df.train <- train
+df.test <- test
+
+#Convertir la variable "satisfaction" a factor en los dataframes
+
+df.train$satisfaction <- factor(df.train$satisfaction, levels = c(0, 1))
+df.test$satisfaction <- factor(df.test$satisfaction, levels = c(0, 1))
+
+#Entrenar el modelo de árbol de decisión
+model <- train(satisfaction ~ ., data = df.train, method = "rpart")
+
+#Predecir los valores en el conjunto de testeo
+predictions <- predict(model, newdata = df.test)
+
+#Matriz de confusión
+confusion_matrix <- confusionMatrix(predictions, df.test$satisfaction)
+print(confusion_matrix)
+
+#Probabilidades de predicción 
+dtree.probs <- predict(model, newdata = test, type = "prob")
+
+#Probabilidades para la clase positiva (satisfacción = 1)
+predicted_probs <- dtree.probs[, "1"]
+
+#Calcular el AUC
+auc <- pROC::auc(as.numeric(test$satisfaction), predicted_probs)
+print(auc)
+
+```
+
+#SVM Muestreo aleatorio con menos datos por falta de RAM
+
+```{r}
+n <- 10000
+t_svm<-sample(1:nrow(train),size=n,replace=FALSE)
+train_svm <-train[t_svm, ]
+```
+
+```{r}
+train_svm$satisfaction<-factor(train_svm$satisfaction)
+test
+svm_fit <- svm(satisfaction ~ ., data = train_svm, kernel = 'linear', gamma=1,cost =1)
+summary(svm_fit)
+
+```
+
+```{r}
+
+
+
+
+roc_svm_test <- roc(response = df.test$satisfaction, predictor =as.numeric(predict(svm_fit, newdata=df.test)))
+plot(roc_svm_test, main = "Curva ROC - Modelo SVM")
+auc_roc2 <- auc(roc_svm_test)
+legend("bottomright", paste("AUC =", round(auc_roc, 3)), cex = 0.8)
+```
+
+```{r}
+confusionMatrix(table(true=df.test$satisfaction,pred=predict(svm_fit, newdata=df.test)))
+```
+
+#Metodos no supervisados
+
+Analisis de componentes principales
+
+```{r}
+corrplot(cor(train), method = "ellipse", order = "AOE", type = "upper")
+```
+
+```{r}
+pca <- prcomp(train, scale = TRUE)
+summary(pca)
+
+```
+
+```{r}
+prop_varianza <- pca$sdev^2 / sum(pca$sdev^2)
+pca_var<-ggplot(data = data.frame(prop_varianza, pc = 1:length(prop_varianza)), aes(x = pc, y = prop_varianza)) + 
+  geom_col(width = 0.3) +  scale_y_continuous(limits = c(0,1)) +  theme_bw() +
+  labs(x = "Componente principal", y = "Prop. de varianza explicada")
+pca_var
+pca
+```
+
+```{r, fig.width=5,fig.height=5}
+prop_varianza_acum <- cumsum(prop_varianza)
+
+pca_var_acum<-ggplot(data = data.frame(prop_varianza_acum, pc = 1:length(prop_varianza)), aes(x = pc, y = prop_varianza_acum, group = 1)) +
+  geom_point() +  geom_line() +  theme_bw() +  labs(x = "Componente principal", y = "Prop. varianza explicada acumulada")
+
+pca_var_acum
+biplot(pca)
+```
+
+```{r}
+var <- get_pca_var(pca)
+corrplot(var$cos2, is.corr = FALSE)
+plot_prcomp(train)
+
+```
+
+#Kmean
+
+```{r}
+n <- 1000
+t_kmean<-sample(1:nrow(train),size=n,replace=FALSE)
+train_kmean <-train[t_kmean, ]
+```
+
+```{r}
+k2 <- kmeans(train_kmean, 2, nstart = 25)
+k3 <- kmeans(train_kmean, centers= 3, nstart = 25)
+fviz_cluster(k2, data = train_kmean)
+fviz_cluster(k3, data = train_kmean)
+train_kmean$cluster<-k2$cluster
+head(train_kmean,6)
+```
+
+```{r}
+k4 <- kmeans(train_kmean, centers = 4, nstart = 25)
+k5 <- kmeans(train_kmean, centers = 5, nstart = 25)
+
+```
+
+```{r}
+p1 <- fviz_cluster(k2, geom = "point", data = train_kmean) + ggtitle("k = 2")
+p1
+```
+
+```{r}
+fviz_nbclust(train_kmean, kmeans, method = "silhouette", k.max = 8)
+
+fviz_nbclust(train_kmean, kmeans, method = "wss", k.max = 8)
+
+fviz_nbclust(train_kmean, kmeans, "gap_stat", k.max = 8)
+
+fviz_eig(prcomp(train_kmean, scale = T))
+
+
+
+```
+
+```{r}
+d <- dist(train_kmean, method = "euclidean")
+hc1 <- hclust(d, method = "complete" )
+plot(hc1, cex = 0.6, hang = -1)
+```
+
+```{r}
+hc2 <- agnes(train_kmean, method = "complete")
+
+hc2$ac
+```
+
+```{r}
+m <- c( "average", "single", "complete", "ward")
+names(m) <- c( "average", "single", "complete", "ward")
+
+# function to compute coefficient
+ac <- function(x) {
+  agnes(train_kmean, method = x)$ac
+}
+
+map_dbl(m, ac)
+hc3 <- agnes(train_kmean, method = "ward")
+pltree(hc3, cex = 0.6, hang = -1, main = "Dendrogram of agnes") 
+
+```
+
+```{r}
+# compute divisive hierarchical clustering
+hc4 <- diana(train_kmean)
+
+# Divise coefficient; amount of clustering structure found
+hc4$dc
+
+pltree(hc4, cex = 0.6, hang = -1, main = "Dendrogram of diana")
+```
+
+#Prunning
+
+```{r}
+# Ward's method
+hc5 <- hclust(d, method = "ward.D2" )
+
+# Cut tree into 4 groups
+sub_grp <- cutree(hc5, k = 4)
+
+# Number of members in each cluster
+table(sub_grp)
+
+train_kmean %>%
+  mutate(cluster = sub_grp) %>%
+  head
+
+plot(hc5, cex = 0.6)
+rect.hclust(hc5, k = 4, border = 2:5)
+```
+
+```{r}
+fviz_cluster(list(data = train_kmean, cluster = sub_grp))
+```
+
+```{r}
+# Optimal number of clusters
+
+fviz_nbclust(train_kmean, FUN = hcut, method = "wss")
+fviz_nbclust(train_kmean, FUN = hcut, method = "silhouette")
+gap_stat <- clusGap(train_kmean, FUN = hcut, nstart = 25, K.max = 10, B = 50)
+fviz_gap_stat(gap_stat)
+```
