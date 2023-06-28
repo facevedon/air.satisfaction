@@ -1,0 +1,551 @@
+---
+title: "Avance 2"
+author: "DC"
+date: "2023-06-12"
+output: pdf_document
+---
+
+## Librerías
+
+```{r message=FALSE, error=FALSE}
+library(MASS)
+library(tidyverse)  
+library(readr) 
+library(tidymodels)
+library(caret)
+library(e1071) 
+library(DataExplorer)
+library(plotly)
+library(dplyr)
+library(readr)
+library(class)
+library(tree)
+library(caTools) 
+library(corrplot) 
+library(rpart)
+library(rpart.plot)
+library(pROC)
+library(ggplot2)
+library(FactoMineR) 
+library(readxl) 
+library(factoextra)
+library(e1071)
+library(neuralnet)
+library(keras)
+library(tensorflow)
+```
+
+## EDA
+
+```{r warning=FALSE, error=FALSE}
+set.seed(163)
+# Cargar el conjunto de datos
+
+df_steel <- read.csv("C:/Users/facev/OneDrive/Documentos/Universidad/2023-1/ANALISIS DE NEGOCIOS/TRABAJO FINAL/db_steel_industry/Steel_industry_data.csv")
+
+# Gráficos exploratorios 
+
+plot_intro(df_steel)
+plot_histogram(df_steel)
+plot_density(df_steel)
+plot_bar(df_steel)
+plot_qq(df_steel)
+
+# Matriz de correlación
+
+cust_cor <- cor(df_steel[,2:6])
+corrplot(cust_cor, method = "color",
+addCoef.col = "white")
+```
+
+## Preparación de los datos
+
+```{r warning=FALSE}
+# Crear otro df auxiliar
+
+df_steel_mod <- df_steel
+
+# Eliminar observaciones sin datos (EDA establece que no hay, pero nos aseguramos de todas formas)
+
+df_steel_mod <- df_steel_mod[complete.cases(df_steel_mod),]
+
+# Cambiar nombres de columnas
+
+new_names <- c("fecha","uso_kwh", "pot_reactiva_retrasada_kvarh", "pot_reactiva_principal_kvarh", "CO2_tCO2","factor_pot_retrasada", "factor_pot_principal", "NSM", "dia_laboral", "dia", "tipo_carga")
+df_steel_mod <- df_steel_mod %>% rename_all(~new_names)
+
+# Strings como factores
+
+df_steel_mod <- as.data.frame(unclass(df_steel_mod), stringsAsFactors = TRUE)
+
+# Binarizacion variable dia_laboral
+
+df_steel_mod$dia_laboral <- ifelse(df_steel_mod$dia_laboral == "Weekday", 1, 0)
+df_steel_mod$dia_laboral <- as.numeric(df_steel_mod$dia_laboral)
+
+# Crear columna Mes en vez de fecha
+
+df_steel_mod <- df_steel_mod %>%
+  mutate(Mes = format(as.Date(fecha), "%m"))
+df_steel_mod$Mes <- as.numeric(df_steel_mod$Mes)
+
+# Eliminar la columna "fecha" y "día"
+
+df_steel_mod <- df_steel_mod %>% select(-fecha)
+df_steel_mod <- df_steel_mod %>% select(-dia)
+
+# Boxplots (Repetir una vez eliminados los outliers)
+
+plot1 <- ggplot(df_steel_mod) + aes(x = pot_reactiva_principal_kvarh, y = uso_kwh) + geom_boxplot(fill = "#fcbe6d") + theme_minimal() + ggtitle("Consumo eléctrico según la potencia reactiva principal") + xlab("Potencia reactiva principal [kVArh]") + ylab("Uso [kWh]")
+
+plot2 <- ggplot(df_steel_mod) + aes(x = pot_reactiva_retrasada_kvarh, y = uso_kwh) + geom_boxplot(fill = "#a2d4eb") + theme_minimal() + ggtitle("Consumo eléctrico según la potencia reactiva retrasada") + xlab("Potencia reactiva retrasada [kVArh]") + ylab("Uso [kWh]")
+
+plot3 <- ggplot(df_steel_mod) + aes(x = CO2_tCO2, y = uso_kwh) + geom_boxplot(fill = "#7fc779") + theme_minimal() + ggtitle("Consumo eléctrico versus toneladas de CO2") + xlab("tCO2") + ylab("Uso [kWh]")
+
+plot1
+plot2
+plot3
+
+```
+
+### One-hot encoding
+
+```{r}
+# One-hot encode de la variable tipo_carga
+
+df_steel_mod <- mutate(df_steel_mod, Light_Load = ifelse(tipo_carga=="Light_Load",1,0))
+df_steel_mod <- mutate(df_steel_mod, Medium_Load = ifelse(tipo_carga=="Medium_Load",1,0))
+df_steel_mod <- mutate(df_steel_mod, Maximum_Load = ifelse(tipo_carga=="Maximum_Load",1,0))
+
+# Se elimina la columna tipo_carga
+
+df_steel_mod <- df_steel_mod %>% select(-tipo_carga)
+```
+
+### Quitar outliers
+
+```{r}
+# Valores fuera de rango se reemplazan por NA
+
+for (i in c("pot_reactiva_principal_kvarh", "pot_reactiva_retrasada_kvarh", "CO2_tCO2"))
+{
+outliers <- boxplot.stats(df_steel_mod[[i]])$out
+df_steel_mod[[i]][df_steel_mod[[i]] %in% outliers] <- NA
+}
+
+# Se eliminan todos los valores fuera rango
+
+df_steel_mod <- filter_if(df_steel_mod, is.numeric , all_vars(!is.na(.)))
+```
+
+## Análisis de Componentes Principales
+
+```{r}
+#Preprocesamiento
+
+df <- df_steel_mod
+df_pre <- preProcess(df, method = c("center", "scale")) 
+
+## Aplicar el preprocesamiento al dataframe
+
+df <- predict(df_pre, df) 
+summary(df)  
+df_pca <- PCA(df, graph = FALSE)  
+
+# Gráficos
+
+fviz_pca_var(df_pca, col.var = "contrib", gradient.cols = c("#fafa6e", "#74d084"), repel = TRUE)  
+fviz_contrib(df_pca,choice = "var", axes = 1,top=21)  
+fviz_eig(df_pca)  
+
+plot_prcomp(df)
+```
+
+### Data split
+
+```{r}
+split<-sample.split(df_steel_mod$uso_kwh,SplitRatio = 0.8) 
+
+steel_train<-df_steel_mod[split==TRUE,] 
+train_default<-df_steel_mod[split==TRUE,'uso_kwh'] 
+
+steel_test<- df_steel_mod[split==FALSE,] 
+test_default<-df_steel_mod[split==FALSE,'uso_kwh']
+
+```
+
+## Regresión Múltiple
+
+```{r}
+# Ajuste del modelo de regresión múltiple
+
+lm_fit <- lm(uso_kwh ~ ., data = steel_train)
+
+# Resumen del modelo
+
+summary(lm_fit)
+
+# Predicciones en el conjunto de prueba
+
+lm_pred <- predict(lm_fit, newdata = steel_test)
+
+# Métricas de evaluación
+
+rmse <- sqrt(mean((lm_pred - steel_test$uso_kwh)^2))
+mae <- mean(abs(lm_pred - steel_test$uso_kwh))
+mape <- mean(abs(lm_pred - steel_test$uso_kwh) / steel_test$uso_kwh) * 100
+
+# Gráfico de residuos
+
+residuals <- lm_pred - steel_test$uso_kwh
+residual_plot <- ggplot() +
+  geom_histogram(aes(x = residuals), bins = 30, fill = "#22166e", color = "black") +
+  labs(x = "Residuals", y = "Frequency") +
+  theme_minimal()
+
+# Resumen
+cat("Regresión Múltiple:\n")
+cat("RMSE:", rmse, "\n")
+cat("MAE:", mae, "\n")
+cat("MAPE:", mape, "%\n")
+print(residual_plot)
+```
+
+## Regresión Logística
+
+```{r}
+# No aplica en este caso pues la variable de respuesta es continua y no binaria.
+```
+
+## LDA
+
+```{r}
+# No aplica en este caso pues no se busca una clasificación de clases.
+```
+
+## QDA
+
+```{r}
+# Idem LDA
+```
+
+## KNN
+
+```{r}
+# El modelo podría adaptarse pero no es recomendado para este problema en particular
+```
+
+## Árbol de decisión
+
+```{r warning=FALSE}
+# Ajuste del modelo de árbol de decisión
+
+tree_fit <- rpart(uso_kwh ~ ., data = steel_train)
+
+# Imprimir el árbol de decisión
+
+print(tree_fit)
+
+# Plot del árbol de decisión
+
+rpart.plot(tree_fit, box.palette = "Blues", shadow.col = "gray", nn = TRUE)
+
+# Predicciones en el conjunto de prueba
+
+tree_pred <- predict(tree_fit, newdata = steel_test)
+
+# Métricas de evaluación
+
+rmse <- sqrt(mean((tree_pred - steel_test$uso_kwh)^2))
+mae <- mean(abs(tree_pred - steel_test$uso_kwh))
+mape <- mean(abs(tree_pred - steel_test$uso_kwh) / steel_test$uso_kwh) * 100
+
+# Curva ROC y AUC
+
+roc_obj <- roc(steel_test$uso_kwh, tree_pred)
+auc <- auc(roc_obj)
+
+# Gráfico de residuos
+
+residuals <- tree_pred - steel_test$uso_kwh
+residual_plot <- ggplot() + 
+  geom_histogram(aes(x = residuals), bins = 30, fill = "#fcd703", color = "black") +
+  labs(x = "Residuals", y = "Frequency") +
+  theme_minimal()
+
+# Resumen
+
+cat("RMSE:", rmse, "\n")
+cat("MAE:", mae, "\n")
+cat("MAPE:", mape, "%\n")
+cat("AUC:", auc, "\n")
+print(residual_plot)
+```
+
+## SVM
+
+```{r}
+# SVM con kernel lineal
+
+svm_fit <- svm(formula = uso_kwh ~ ., data = steel_train, kernel = 'linear')
+summary(svm_fit)
+
+# Gráfico del modelo SVM con kernel lineal
+
+plot(svm_fit, steel_train)
+
+# Predicciones en el conjunto de prueba
+
+svm_pred <- predict(svm_fit, newdata = steel_test)
+
+# Métricas de evaluación
+
+rmse <- sqrt(mean((svm_pred - steel_test$uso_kwh)^2))
+mae <- mean(abs(svm_pred - steel_test$uso_kwh))
+mape <- mean(abs(svm_pred - steel_test$uso_kwh) / steel_test$uso_kwh) * 100
+
+# Curva ROC y AUC
+
+roc_obj <- roc(steel_test$uso_kwh, svm_pred)
+auc <- auc(roc_obj)
+
+# Gráfico de residuos
+
+residuals <- svm_pred - steel_test$uso_kwh
+residual_plot <- ggplot() +
+  geom_histogram(aes(x = residuals), bins = 30, fill = "#970e9c", color = "black") +
+  labs(x = "Residuals", y = "Frequency") +
+  theme_minimal()
+
+# Métricas y gráficos 
+
+cat("SVM con Kernel Lineal:\n")
+cat("RMSE:", rmse, "\n")
+cat("MAE:", mae, "\n")
+cat("MAPE:", mape, "%\n")
+cat("AUC:", auc, "\n")
+print(residual_plot)
+
+# SVM con kernel radial
+
+svm_fit2 <- svm(formula = uso_kwh ~ ., data = steel_train, kernel = 'radial')
+summary(svm_fit2)
+
+# Gráfico del modelo SVM con kernel radial
+
+plot(svm_fit2, steel_train)
+
+# Predicciones en el conjunto de prueba
+
+svm_pred2 <- predict(svm_fit2, newdata = steel_test)
+
+# Métricas de evaluación
+
+rmse2 <- sqrt(mean((svm_pred2 - steel_test$uso_kwh)^2))
+mae2 <- mean(abs(svm_pred2 - steel_test$uso_kwh))
+mape2 <- mean(abs(svm_pred2 - steel_test$uso_kwh) / steel_test$uso_kwh) * 100
+
+# Curva ROC y AUC
+
+roc_obj2 <- roc(steel_test$uso_kwh, svm_pred2)
+auc2 <- auc(roc_obj2)
+
+# Gráfico de residuos
+
+residuals2 <- svm_pred2 - steel_test$uso_kwh
+residual_plot2 <- ggplot() +
+  geom_histogram(aes(x = residuals2), bins = 30, fill = "#7ec9d6", color = "black") +
+  labs(x = "Residuals", y = "Frequency") +
+  theme_minimal()
+
+# Resumen
+
+cat("\nSVM con kernel Radial:\n")
+cat("RMSE:", rmse2, "\n")
+cat("MAE:", mae2, "\n")
+cat("MAPE:", mape2, "%\n")
+cat("AUC:", auc2, "\n")
+print(residual_plot2)
+```
+
+## K-Means
+
+```{r}
+# No tiene sentido el uso de K-Means en este problema dado que es de regresión y no de clustering
+```
+
+## Clustering Jerárquico
+
+```{r}
+# Idem K-Means
+```
+
+## Redes neuronales
+
+```{r}
+library(nnet)
+library(tidymodels)
+
+# Receta
+
+nn_recipe <- recipe(uso_kwh ~ ., data = steel_train) %>% 
+  step_dummy(all_factor_predictors())
+
+# Modelo
+nnet_mod <- mlp(
+  hidden_units = 10,
+  epochs = 1000,
+  penalty = 0.3
+) %>%
+  set_mode("regression") %>%  
+  set_engine("nnet", verbose = 0)
+
+# Workflow
+nnet_wflow <- 
+  workflow() %>%
+  add_recipe(nn_recipe) %>%
+  add_model(nnet_mod)  
+
+# Ajuste del modelo
+nnet_fit <- nnet_wflow %>% 
+  fit(data = steel_train)
+
+# Predicciones en el conjunto de testeo
+nn_pred <- steel_test %>%
+  select(uso_kwh) %>%
+  bind_cols(nnet_fit %>% predict(new_data = steel_test))
+  bind_cols(nnet_fit %>% predict(new_data = steel_test, type = "numeric"))
+
+# Imprimir el resultado
+nn_pred
+head(steel_test$uso_kwh)
+
+# Predicción vs valores reales
+
+scatter_plot <- ggplot(nn_pred, aes(x = uso_kwh, y = .pred)) +
+  geom_point(color = "#ffaca6", alpha = 0.7) +
+  geom_abline(intercept = 0, slope = 1, color = "blue", linetype = "dashed") +
+  labs(x = "Actual", y = "Predicted") +
+  theme_minimal()
+
+print(scatter_plot)
+
+# Indicadores
+
+rmse_nn <- sqrt(mean((nn_pred$.pred - steel_test$uso_kwh)^2))
+mae_nn <- mean(abs(nn_pred$.pred - steel_test$uso_kwh))
+mape_nn <- mean(abs(nn_pred$.pred - steel_test$uso_kwh) / steel_test$uso_kwh) * 100
+auc_nn <- roc(steel_test$uso_kwh, nn_pred$.pred)
+auc_value <- auc_nn$auc
+
+# Gráfico de residuos
+nn_resid <- nn_pred$.pred - steel_test$uso_kwh
+residual_plot_nn <- ggplot() +
+  geom_histogram(aes(x = nn_resid), bins = 30, fill = "#ffaca6", color = "black") +
+  labs(x = "Residuals", y = "Frequency") +
+  theme_minimal()
+
+# Imprimir el resultado
+cat("MAE:", mae_nn, "\n")
+cat("MAPE:", mape_nn, "%\n")
+cat("RMSE:", rmse_nn, "\n")
+cat("AUC:", auc_value, "\n")
+print(residual_plot_nn)
+```
+
+## Red Neuronal Convolucional (CNN)
+
+```{r}
+library(keras)
+library(caret)
+
+# Se separan los conjuntos en base a las features
+
+xtrain = as.matrix(steel_train[,-1])
+ytrain = as.matrix(steel_train[,1])
+xtest = as.matrix(steel_test[,-1])
+ytest = as.matrix(steel_test[, 1])
+
+# Se chequean dimensiones 
+
+dim(xtrain)
+dim(ytrain)
+
+# Se redimensionan los conjuntos, añadiendo una dimensión más
+
+xtrain = array(xtrain, dim = c(nrow(xtrain), 11, 1))
+xtest = array(xtest, dim = c(nrow(xtest), 11, 1))
+ 
+dim(xtrain)
+dim(xtest)
+
+# Se extrae la dimensión de entrada
+
+in_dim = c(dim(xtrain)[2:3])
+print(in_dim)
+
+# Modelo
+
+model_cnn = keras_model_sequential() %>%
+  layer_conv_1d(filters = 64, kernel_size = 2,
+               input_shape = in_dim, activation = "relu") %>%
+  layer_flatten() %>%
+  layer_dense(units = 32, activation = "relu") %>%
+  layer_dense(units = 1, activation = "linear")
+
+#plot(model_cnn, show_shapes = TRUE)
+ 
+model_cnn %>% compile(
+  loss = "mse",
+  optimizer = "adam")
+
+model_cnn %>% summary()
+
+# Ajuste del modelo
+
+model_cnn %>% fit(xtrain, ytrain, epochs = 100, batch_size=16, verbose = 0)
+scores = model_cnn %>% evaluate(xtrain, ytrain, verbose = 0)
+print(scores)
+
+# Predicciones
+
+ypred_cnn = model_cnn %>% predict(xtest)
+
+# Gráfico de residuos
+
+residuals = ytest - ypred_cnn
+plot(ytest, residuals, col = "#7eccc7", xlab = "Valor Real", ylab = "Residuos",
+     main = "Gráfico de Residuos", pch = 16)
+abline(h = 0, col = "black", lty = 2)
+
+residual_plot_cnn <- ggplot() +
+  geom_histogram(aes(x = residuals), bins = 30, fill = "#ffaca6", color = "black") +
+  labs(x = "Residuals", y = "Frequency") +
+  theme_minimal()
+print(residual_plot_cnn)
+
+# Indicadores 
+
+RMSE <- RMSE(ytest, ypred_cnn)
+MAPE <- mean(abs((ytest - ypred_cnn) / ytest)) * 100
+MAE <- mean(abs(ytest - ypred_cnn))
+AUC <- auc(roc(ytest, ypred_cnn))
+
+cat("\nRMSE:", RMSE)
+cat("\nMAPE:", MAPE)
+cat("\nMAE:", MAE)
+cat("\nAUC:", AUC)
+
+# Predicción vs real
+
+step_size <- ceiling(length(ypred_cnn) / 100)
+x_axes <- seq(1, length(ypred_cnn), by = step_size)
+
+# Crear el gráfico con 100 observaciones
+plot(x_axes, ytest[x_axes], ylim = c(min(ypred_cnn), max(ytest)),
+     col = "#ba50fb", type = "l", lwd = 2, ylab = "uso_kwh")
+lines(x_axes, ypred_cnn[x_axes], col = "#3f3bfe", type = "l", lwd = 2)
+legend("topleft", legend = c("y-test", "y-pred"),
+       col = c("#ba50fb", "#3f3bfe"), lty = 1, cex = 0.7, lwd = 2, bty = 'n')
+
+```

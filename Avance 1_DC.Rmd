@@ -32,8 +32,16 @@ library(class)
 library(rpart)
 library(corrplot)
 library(factoextra)
+library(nnet)
 library(gridExtra)
 library(cluster)
+library(tidymodels)
+library(FactoMineR) 
+library(readxl) 
+library(factoextra)
+library(neuralnet)
+library(keras)
+library(tensorflow)
 ```
 
 ## EDA Inicial
@@ -468,4 +476,96 @@ fviz_nbclust(train_kmean, FUN = hcut, method = "wss")
 fviz_nbclust(train_kmean, FUN = hcut, method = "silhouette")
 gap_stat <- clusGap(train_kmean, FUN = hcut, nstart = 25, K.max = 10, B = 50)
 fviz_gap_stat(gap_stat)
+```
+
+```{r}
+library(reticulate)
+library(tensorflow)
+use_condaenv("C:/Users/facev/AppData/Local/R-MINI~1/envs/r-reticulate", required = TRUE)
+
+xtrain = as.matrix(train[,-1])
+ytrain = as.matrix(train[,1])
+xtest = as.matrix(test[,-1])
+ytest = as.matrix(test[, 1])
+
+```
+
+```{r}
+
+
+# Crear modelo
+model <- keras_model_sequential() %>%
+  layer_dense(units = 64, activation = "relu", input_shape = ncol(xtrain)) %>%
+  layer_dense(units = 32, activation = "relu") %>%
+  layer_dense(units = 1, activation = "sigmoid")
+
+# Compilar el modelo
+model %>% compile(
+  loss = "binary_crossentropy",
+  optimizer = "adam",
+  metrics = c("accuracy")
+)
+
+# Entrenar el modelo
+history <- model %>% fit(
+  x = xtrain, y = ytrain,
+  epochs = 100,
+  batch_size = 32,
+  validation_split = 0.2
+)
+
+# Realizar predicciones en el conjunto de prueba
+predictions <- model %>% predict(xtest)
+
+# Evaluar el rendimiento del modelo en el conjunto de prueba
+metrics <- model %>% evaluate(xtest, ytest)
+
+# Graficar la precisión y pérdida durante el entrenamiento
+plot(history)
+
+
+sample_size <- 100
+sample_indices <- sample(1:nrow(xtest), sample_size)
+actual_values <- ytest[sample_indices]
+predicted_values <- predictions[sample_indices]
+
+
+
+```
+
+```{r}
+# Calcular las predicciones del modelo en el conjunto de prueba
+predictions <- model %>% predict(xtest)
+
+# Calcular el error cuadrático medio (RMSE)
+rmse <- sqrt(mean((predictions - ytest)^2))
+
+# Calcular el error medio absoluto (MAE)
+mae <- mean(abs(predictions - ytest))
+
+# Calcular el error porcentual absoluto medio (MAPE)
+mape <- mean(abs((predictions - ytest) / ytest)) * 100
+
+# Imprimir los resultados
+print(paste("RMSE:", rmse))
+print(paste("MAE:", mae))
+print(paste("MAPE:", mape))
+
+```
+
+```{r}
+# Calcular los residuos
+residuals <- predictions - ytest
+
+
+residuals_df <- data.frame(Predictions = predictions, Residuals = residuals)
+
+
+ggplot(residuals_df, aes(x = Predictions, y = Residuals)) +
+  geom_point(color = "blue", alpha = 0.7) +
+  geom_hline(yintercept = 0, color = "red", linetype = "dashed") +
+  labs(x = "Predictions", y = "Residuals") +
+  ggtitle("Gráfico de Residuos") +
+  theme_minimal()
+
 ```
